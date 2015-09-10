@@ -4,10 +4,11 @@ module Fluent
   class RecordReformerOutput < Output
     Fluent::Plugin.register_output('record_reformer', self)
 
-    def initialize
-      require 'socket'
-      super
-    end
+  def initialize
+    super
+    require  'socket'
+
+  end
 
     config_param :output_tag, :string, :default => nil # obsolete
     config_param :tag, :string, :default => nil
@@ -30,9 +31,20 @@ module Fluent
       define_method("router") { Fluent::Engine }
     end
 
+    $dockername
+    $uuid
     def configure(conf)
       super
-
+ 
+      if File.exist?("/etc/omega/agent/omega-agent.conf")
+        File.open("/etc/omega/agent/omega-agent.conf", "r") do |file|
+          $uuid = parse_value(file.gets)["OmegaUUID"]
+        end
+      else
+        log.warn "uuid file is not found"
+      end
+ 
+      $dockername = DockerNameResolverOutput.new
       @map = {}
       conf.each_pair { |k, v|
         next if BUILTIN_CONFIGURATIONS.include?(k)
@@ -84,14 +96,19 @@ module Fluent
 
     def emit(tag, es, chain)
       tag_parts = tag.split('.')
+      container_id = tag_parts[5]
+      #dockername.say()
       tag_prefix = tag_prefix(tag_parts)
       tag_suffix = tag_suffix(tag_parts)
+      containername = $dockername.rewrite_tag(tag)
       placeholders = {
         'tag' => tag,
         'tags' => tag_parts,
         'tag_parts' => tag_parts,
         'tag_prefix' => tag_prefix,
         'tag_suffix' => tag_suffix,
+        'containername' => containername,
+        'uuid' => $uuid,
         'hostname' => @hostname,
       }
       last_record = nil
@@ -268,5 +285,55 @@ module Fluent
         end
       end
     end
+
+    class Fluent::DockerNameResolverOutput < Fluent::Output
+      # Define `log` method for v0.10.42 or earlier
+      unless method_defined?(:log)
+        define_method("log") { $log }
+      end
+
+      def initialize
+        super
+        require 'docker'
+
+        @containers = Docker::Container.all
+
+        @find_containers = Proc.new do |id|
+          container = @containers.select{|c| c.id == id}.first
+
+          if container.nil?
+            @containers = Docker::Container.all 
+            @containers.select{|c| c.id == id}.first
+          else
+            container
+          end
+        end
+      end
+
+      def rewrite_tag(tag)
+        container_id, _ , _ = tag.split('.').last(3)
+
+        #log.warn "****************#{container_id}"
+
+        container = @find_containers.call(container_id)
+
+        return tag unless container
+
+        image_name = container.info['Image']
+        container_name = container.info['Names'].first
+
+        return tag if image_name.nil? or container_name.nil?
+
+        container_name.sub!(/^\//, '')
+        container_name.tr!('.','_')
+        image_name.tr!('.','_')
+
+        #rewrited_tag = "docker.container.%s.%s.%s" % [image_name, container_name, container_id]
+        #return rewrited_tag
+        return container_name
+      end
+
+    end
+
   end
 end
