@@ -37,9 +37,16 @@ module Fluent
       super
  
       if File.exist?("/etc/omega/agent/omega-agent.conf")
-        File.open("/etc/omega/agent/omega-agent.conf", "r") do |file|
-          $uuid = parse_value(file.gets)["OmegaUUID"]
+        filecontent = ""
+        file = File.new("/etc/omega/agent/omega-agent.conf", "r")
+        while (line = file.gets)
+          #log.warn "#{counter}: #{line}"
+          filecontent = filecontent.concat(line)
         end
+        file.close
+        filecontent = filecontent.gsub(/\s*|\t|\r|\n/, "")
+        $uuid = parse_value(filecontent)["OmegaUUID"]
+        log.info "#{filecontent} -- #{$uuid}"
       else
         log.warn "uuid file is not found"
       end
